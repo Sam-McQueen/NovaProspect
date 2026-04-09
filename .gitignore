@@ -1,0 +1,25 @@
+# Python
+venv/
+.env
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Data & large files
+*.zip
+*.geojson
+data/
+outputs/
+*.log
+
+# Temporary / backup files
+*.save
+*.bak
+*~
+
+# AWS / other junk
+awscliv2.zip
