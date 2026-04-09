@@ -62,18 +62,7 @@ class TerrainSummary:
     nearest_drainage_m:   Optional[float] = None
     topographic_wetness:  Optional[float] = None   # TWI
     terrain_roughness:    Optional[float] = None   # Std dev of elevation within cell
-@dataclass
-class GeochemistrySummary:
-    """Output of the geochemistry_agent — stream sediment and soil geochemistry."""
-    au_anomaly_score:         Optional[float] = None
-    au_ppb_max:               Optional[float] = None
-    au_ppb_mean:              Optional[float] = None
-    nearest_au_sample_m:      Optional[float] = None
-    au_sample_count:          int   = 0
-    ag_anomaly_score:         Optional[float] = None
-    as_anomaly_score:         Optional[float] = None
-    sb_anomaly_score:         Optional[float] = None
-    hg_anomaly_score:         Optional[float] = None
+
 
 @dataclass
 class PointDataSummary:
@@ -353,3 +342,16 @@ class GridCell:
             lines.append("\n** EXCLUDED — retained for spatial inference but not a drill target **")
 
         return "\n".join(lines)
+
+@dataclass
+class GeochemistrySummary:
+    """Output of the geochemistry_agent."""
+    au_anomaly_score:    Optional[float] = None
+    au_ppb_max:          Optional[float] = None
+    au_ppb_mean:         Optional[float] = None
+    nearest_au_sample_m: Optional[float] = None
+    au_sample_count:     int   = 0
+    ag_anomaly_score:    Optional[float] = None
+    as_anomaly_score:    Optional[float] = None
+    sb_anomaly_score:    Optional[float] = None
+    hg_anomaly_score:    Optional[float] = None

@@ -1,39 +1,5 @@
 """
 sierra_prospector/main.py
-=====================================
-Main entry point.
-
-AGENT ROUNDS:
-  Round 1 — Raw data readers (free, local, run in any order)
-    terrain_agent      DEM → elevation, slope, aspect
-    spectral_agent     Landsat → band ratios, alteration
-    geochemistry_agent USGS stream sediment → Au anomaly scores
-    point_data_agent   Gravity, magnetics, faults, mines, boreholes
-
-  Round 2 — Context readers (run after Round 1)
-    structural_agent   Synthesises Round 1 → structural gold trap assessment
-    vision_agent       Renders DEM images → Grok visual interpretation
-
-  Round 3 — Final (runs last, reads everything)
-    history_agent      Historical docs + all prior data → depletion score
-
-COMMANDS:
-  python main.py                              Full ingest levels 0-5 (all agents)
-  python main.py --agent terrain              Run ONLY terrain agent
-  python main.py --agent spectral             Run ONLY spectral agent
-  python main.py --agent geochemistry         Run ONLY geochemistry agent
-  python main.py --agent point_data           Run ONLY point data agent
-  python main.py --agent structural           Run ONLY structural agent (Round 2)
-  python main.py --agent vision               Run ONLY vision agent (Round 2)
-  python main.py --agent history              Run ONLY history agent (Round 3)
-  python main.py --max-level 0                Run through level 0 only
-  python main.py --dry-run                    No DB writes
-  python main.py --check                      Verify setup
-  python main.py --status                     Current DB progress
-  python main.py --export-geojson 0           Export level 0 to QGIS
-  python main.py --read-cell Z00_R008_C004    Human summary for one cell
-  python main.py --test-vision Z00_R008_C004  Run vision on one cell
-  python main.py --storage-estimate           Disk space estimate
 """
 
 import argparse
@@ -55,10 +21,6 @@ from core.comms import broker
 from core.ontology import CellStatus
 
 log = get_logger("main")
-
-
-# ── Agent registry ────────────────────────────────────────────────────────────
-# Add new agents here. Order matters within rounds.
 
 ROUND_1_AGENTS = [
     "terrain_agent",
@@ -84,9 +46,7 @@ ALL_AGENTS = ROUND_1_AGENTS + ROUND_2_AGENTS + ROUND_3_AGENTS
 
 
 def build_agents():
-    """Instantiate all agents and register with broker."""
     agents = {}
-
     from agents.terrain_agent        import TerrainAgent
     from agents.spectral_agent       import SpectralAgent
     from agents.geochemistry_agent   import GeochemistryAgent
@@ -118,20 +78,13 @@ def build_agents():
     return agents
 
 
-# ── Ingest ────────────────────────────────────────────────────────────────────
-
 def run_ingest(
     min_level:    int  = 0,
     max_level:    int  = 5,
     dry_run:      bool = False,
     workers:      int  = 4,
-    agent_filter: str  = None,   # None = all agents, else agent name
+    agent_filter: str  = None,
 ):
-    """
-    Main ingest loop. Processes all cells from min_level to max_level.
-
-    agent_filter: run only this one agent (for manual dataset construction)
-    """
     log.info("Starting ingest",
              min_level=min_level, max_level=max_level,
              dry_run=dry_run, agent_filter=agent_filter or "all")
@@ -148,179 +101,155 @@ def run_ingest(
             cell_size_m = RESOLUTION_LEVELS.get(level)
             if cell_size_m is None:
                 continue
-        log.info("=" * 60)
-        log.info(f"LEVEL {level} — cell size {cell_size_m:,}m ({cell_size_m/1000:.1f}km)")
-        log.info("=" * 60)
 
-        # Get cells to process
-        if level == 0:
-            cells_iter = list(grid.iter_cells_at_level(level))
-        else:
-            qualifying_parents = db.get_top_cells(
-                level=level - 1, n=999_999, min_confidence=0.2
-            )
-            log.info("Qualifying parent cells",
-                     parent_level=level-1,
-                     count=len(qualifying_parents))
+            log.info("=" * 60)
+            log.info(f"LEVEL {level} — cell size {cell_size_m:,}m ({cell_size_m/1000:.1f}km)")
+            log.info("=" * 60)
 
-            def child_cells(parents):
-                for parent in parents:
-                    for child_id in grid.get_children(parent.tile_id):
-                        cell = grid.build_cell(*grid.parse_tile_id(child_id))
-                        yield cell
-
-            cells_iter = list(child_cells(qualifying_parents))
-
-        # Register all cells in DB and load existing data
-        batch = []
-        cells_for_analysis = []
-        for cell in cells_iter:
-            existing = db.get_cell(cell.tile_id)
-            if existing:
-                if existing.status == CellStatus.EXCLUDED:
-                    continue   # Never re-process excluded cells
-                if existing.status == CellStatus.COMPLETE and agent_filter is None:
-                    continue   # Skip complete cells only in full pipeline mode
-                # Always use existing cell — preserves all prior agent data
-                cells_for_analysis.append(existing)
+            if level == 0:
+                cells_iter = list(grid.iter_cells_at_level(level))
             else:
-                # New cell — register it
-                batch.append(cell)
-                cells_for_analysis.append(cell)
-            if len(batch) >= 500:
+                qualifying_parents = db.get_top_cells(
+                    level=level - 1, n=999_999, min_confidence=0.2
+                )
+                log.info("Qualifying parent cells",
+                         parent_level=level-1,
+                         count=len(qualifying_parents))
+
+                def child_cells(parents):
+                    for parent in parents:
+                        for child_id in grid.get_children(parent.tile_id):
+                            cell = grid.build_cell(*grid.parse_tile_id(child_id))
+                            yield cell
+
+                cells_iter = list(child_cells(qualifying_parents))
+
+            batch = []
+            cells_for_analysis = []
+            for cell in cells_iter:
+                existing = db.get_cell(cell.tile_id)
+                if existing:
+                    if existing.status == CellStatus.EXCLUDED:
+                        continue
+                    if existing.status == CellStatus.COMPLETE and agent_filter is None:
+                        continue
+                    cells_for_analysis.append(existing)
+                else:
+                    batch.append(cell)
+                    cells_for_analysis.append(cell)
+                if len(batch) >= 500:
+                    if not dry_run:
+                        db.upsert_cells_batch(batch)
+                    batch = []
+
+            if batch and not dry_run:
+                db.upsert_cells_batch(batch)
+
+            log.info("Cells registered", level=level, to_process=len(cells_for_analysis))
+
+            if not cells_for_analysis:
+                log.info("No cells to process", level=level)
+                continue
+
+            if agent_filter:
+                if agent_filter not in agents:
+                    print(f"Unknown agent: {agent_filter}")
+                    print(f"Available: {', '.join(ALL_AGENTS)}")
+                    return
+                run_order = [agent_filter]
+            else:
+                run_order = ALL_AGENTS
+
+            alerts.reset_run_counters()
+
+            for agent_name in run_order:
+                if agent_name not in ROUND_1_AGENTS:
+                    continue
+                agent = agents[agent_name]
+
+                if agent_name == "vector_agent":
+                    print(f"\n--- Running {agent_name} on {len(cells_for_analysis)} cells ---")
+                    stats = agent.run_all_cells(cells_for_analysis, dry_run=dry_run)
+                    log.info("Agent complete", agent=agent_name, **stats)
+                    print(f"    {agent_name}: {stats['cells_updated']} cells updated")
+                    continue
+
+                if agent_name == "textual_agent":
+                    print(f"\n--- Running {agent_name} on {len(cells_for_analysis)} cells ---")
+                    stats = agent.run_all_cells(cells_for_analysis, dry_run=dry_run)
+                    log.info("Agent complete", agent=agent_name, **stats)
+                    print(f"    {agent_name}: {stats['cells_updated']} cells updated, "
+                          f"{stats['total_points']} points distributed")
+                    continue
+
+                print(f"\n--- Running {agent_name} on {len(cells_for_analysis)} cells ---")
+                stats = agent.run_on_cells(
+                    iter(cells_for_analysis),
+                    workers=workers,
+                    dry_run=dry_run,
+                )
+                log.info("Agent complete", agent=agent_name, **stats)
+                print(f"    {agent_name}: {stats['success']} ok, {stats['failed']} failed, {stats['duration_s']}s")
+
+            for agent_name in run_order:
+                if agent_name not in ROUND_2_AGENTS:
+                    continue
+                agent = agents[agent_name]
+                cutoff = ACTIVE_CONFIG.get("confidence_cutoff", 0.3)
+
                 if not dry_run:
-                    db.upsert_cells_batch(batch)
-                batch = []
+                    qualifying = [
+                        c for c in [db.get_cell(cell.tile_id) for cell in cells_for_analysis]
+                        if c and (c.probability_score or 0) >= cutoff
+                    ]
+                else:
+                    qualifying = cells_for_analysis
 
-        if batch and not dry_run:
-            db.upsert_cells_batch(batch)
+                print(f"\n--- Running {agent_name} on {len(qualifying)} qualifying cells ---")
+                if not qualifying:
+                    print(f"    No cells above cutoff ({cutoff}) — skipping")
+                    continue
 
-        log.info("Cells registered", level=level, to_process=len(cells_for_analysis))
-
-        if not cells_for_analysis:
-            log.info("No cells to process", level=level)
-            continue
-
-        # ── Determine which agents to run ─────────────────────────────────────
-        if agent_filter:
-            # Single agent mode
-            if agent_filter not in agents:
-                print(f"Unknown agent: {agent_filter}")
-                print(f"Available: {', '.join(ALL_AGENTS)}")
-                return
-            run_order = [agent_filter]
-        else:
-            # Full pipeline
-            run_order = ALL_AGENTS
-
-        # Reset alert counters for this level
-        from core.alerts import alerts
-        alerts.reset_run_counters()
-
-        # ── Round 1: local agents ─────────────────────────────────────────────
-        for agent_name in run_order:
-            if agent_name not in ROUND_1_AGENTS:
-                continue
-            agent = agents[agent_name]
-
-            # Vector agent uses bulk loader — different interface
-            if agent_name == "vector_agent":
-                print(f"\n--- Running {agent_name} on {len(cells_for_analysis)} cells ---")
-                stats = agent.run_all_cells(cells_for_analysis, dry_run=dry_run)
+                stats = agent.run_on_cells(
+                    iter(qualifying),
+                    workers=1,
+                    dry_run=dry_run,
+                )
                 log.info("Agent complete", agent=agent_name, **stats)
-                print(f"    {agent_name}: {stats['cells_updated']} cells updated")
-                continue
+                print(f"    {agent_name}: {stats['success']} ok, {stats['failed']} failed")
 
-            # Textual agent uses bulk loader — different interface
-            if agent_name == "textual_agent":
-                print(f"\n--- Running {agent_name} on {len(cells_for_analysis)} cells ---")
-                stats = agent.run_all_cells(cells_for_analysis, dry_run=dry_run)
+            for agent_name in run_order:
+                if agent_name not in ROUND_3_AGENTS:
+                    continue
+                agent = agents[agent_name]
+
+                if not dry_run:
+                    all_cells = [
+                        c for c in [db.get_cell(cell.tile_id) for cell in cells_for_analysis]
+                        if c is not None
+                    ]
+                else:
+                    all_cells = cells_for_analysis
+
+                print(f"\n--- Running {agent_name} on {len(all_cells)} cells ---")
+                stats = agent.run_on_cells(
+                    iter(all_cells),
+                    workers=1,
+                    dry_run=dry_run,
+                )
                 log.info("Agent complete", agent=agent_name, **stats)
-                print(f"    {agent_name}: {stats['cells_updated']} cells updated, "
-                      f"{stats['total_points']} points distributed")
-                continue
-            print(f"\n--- Running {agent_name} on {len(cells_for_analysis)} cells ---")
-            stats = agent.run_on_cells(
-                iter(cells_for_analysis),
-                workers=workers,
-                dry_run=dry_run,
-            )
-            log.info("Agent complete", agent=agent_name, **stats)
-            print(f"    {agent_name}: {stats['success']} ok, {stats['failed']} failed, {stats['duration_s']}s")
-
-            # Check for critical alerts — halt if needed
-            if alerts.should_halt():
-                print(f"\nPIPELINE HALTED by alert system.")
-                print(f"Reason: {alerts.halt_reason()}")
-                db.disconnect()
-                return
-
-        # ── Round 2: context agents (API calls — only qualifying cells) ────────
-        for agent_name in run_order:
-            if agent_name not in ROUND_2_AGENTS:
-                continue
-            agent = agents[agent_name]
-            cutoff = ACTIVE_CONFIG.get("confidence_cutoff", 0.3)
-
-            # Refresh cells from DB to get Round 1 scores
-            if not dry_run:
-                qualifying = [
-                    c for c in [db.get_cell(cell.tile_id) for cell in cells_for_analysis]
-                    if c and (c.probability_score or 0) >= cutoff
-                ]
-            else:
-                qualifying = cells_for_analysis
-
-            print(f"\n--- Running {agent_name} on {len(qualifying)} qualifying cells ---")
-            if not qualifying:
-                print(f"    No cells above cutoff ({cutoff}) — skipping")
-                continue
-
-            stats = agent.run_on_cells(
-                iter(qualifying),
-                workers=1,   # API agents single-threaded
-                dry_run=dry_run,
-            )
-            log.info("Agent complete", agent=agent_name, **stats)
-            print(f"    {agent_name}: {stats['success']} ok, {stats['failed']} failed")
-
-        # ── Round 3: history (runs last on all cells) ──────────────────────────
-        for agent_name in run_order:
-            if agent_name not in ROUND_3_AGENTS:
-                continue
-            agent = agents[agent_name]
 
             if not dry_run:
-                all_cells = [
-                    c for c in [db.get_cell(cell.tile_id) for cell in cells_for_analysis]
-                    if c is not None
-                ]
-            else:
-                all_cells = cells_for_analysis
+                export_geojson(level)
 
-            print(f"\n--- Running {agent_name} on {len(all_cells)} cells ---")
-            stats = agent.run_on_cells(
-                iter(all_cells),
-                workers=1,
-                dry_run=dry_run,
-            )
-            log.info("Agent complete", agent=agent_name, **stats)
-
-        # ── Export GeoJSON ─────────────────────────────────────────────────────
-        if not dry_run:
-            export_geojson(level)
-
-        # Print alert summary for this level
-        print(alerts.summary())
+            print(alerts.summary())
 
     except PipelineHaltException:
-        pass   # Banner already printed by alert system
+        pass
 
     log.info("Ingest complete")
     print_status()
 
-
-# ── Utilities ─────────────────────────────────────────────────────────────────
 
 def export_geojson(level: int):
     cells = db.get_cells_at_level(level)
@@ -473,37 +402,9 @@ def read_cell(tile_id: str):
     print()
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
 def main():
-    parser = argparse.ArgumentParser(
-        description="Sierra Nevada Gold Prospecting System",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Individual agent runs (for building datasets with full oversight):
-  python main.py --agent terrain              Terrain only — all levels
-  python main.py --agent terrain --max-level 0  Terrain on level 0 only
-  python main.py --agent spectral             Spectral only
-  python main.py --agent geochemistry         Geochemistry only
-  python main.py --agent point_data           Gravity/magnetics/faults/mines
-  python main.py --agent structural           Structural synthesis (needs Round 1)
-  python main.py --agent vision               Vision/Grok analysis
-  python main.py --agent history              History + depletion (runs last)
-
-Full pipeline:
-  python main.py --max-level 0                All agents, level 0 only
-  python main.py                              All agents, all levels
-
-Utilities:
-  python main.py --check                      Verify setup
-  python main.py --status                     DB progress
-  python main.py --export-geojson 0           Export to QGIS
-  python main.py --read-cell Z00_R000008_C000004
-  python main.py --test-vision Z00_R000008_C000004
-  python main.py --storage-estimate
-        """
-    )
-    parser.add_argument("--agent",            type=str,  default=None, help=f"Run one agent only: {', '.join(ALL_AGENTS)}")
+    parser = argparse.ArgumentParser(description="Sierra Nevada Gold Prospecting System")
+    parser.add_argument("--agent",            type=str,  default=None)
     parser.add_argument("--min-level",        type=int,  default=0)
     parser.add_argument("--max-level",        type=int,  default=5)
     parser.add_argument("--workers",          type=int,  default=4)
@@ -515,7 +416,7 @@ Utilities:
     parser.add_argument("--read-cell",        type=str,  default=None)
     parser.add_argument("--test-vision",      type=str,  default=None)
     parser.add_argument("--test-lidar",       type=str,  default=None)
-    parser.add_argument("--lidar-tiles",      action="store_true", help="Run LiDAR agent on all tiles at native resolution")
+    parser.add_argument("--lidar-tiles",      action="store_true")
 
     args = parser.parse_args()
 
@@ -541,59 +442,50 @@ Utilities:
 
     if args.test_vision:
         from agents.vision_agent import VisionAgent
-        print(f"\nVision test — phase: {AGENT_PHASE}")
-        print(f"Model: {ACTIVE_CONFIG['vision_model']}")
-        print(f"Max tokens: {ACTIVE_CONFIG['max_tokens']}\n")
         db.connect()
         cell = db.get_cell(args.test_vision)
         if cell is None:
-            print(f"Cell {args.test_vision} not found. Run an ingest first.")
+            print(f"Cell {args.test_vision} not found.")
             db.disconnect()
             return
         agent = VisionAgent()
         result = agent.process_cell(cell)
         db.upsert_cell(result)
-        print("\nUpdated cell summary:")
         print(result.to_llm_prompt())
         db.disconnect()
         return
 
     if args.test_lidar:
-        from agents.lidar_agent import LidarAgent
-        print(f"\nLiDAR test — processing all tiles near a known location")
+        from agents.lidar_agent import LidarAgent, find_overlapping_tiles
         db.connect()
         agent = LidarAgent()
-        # Find a zip that overlaps the requested cell
         cell = db.get_cell(args.test_lidar)
         if cell is None:
             print(f"Cell {args.test_lidar} not found.")
             db.disconnect()
             return
-        from agents.lidar_agent import find_overlapping_tiles
-        bounds  = (cell.min_lon, cell.min_lat, cell.max_lon, cell.max_lat)
-        tiles   = find_overlapping_tiles(bounds, agent._tile_index, agent._lidar_dir)
+        bounds = (cell.min_lon, cell.min_lat, cell.max_lon, cell.max_lat)
+        tiles  = find_overlapping_tiles(bounds, agent._tile_index, agent._lidar_dir)
         if not tiles:
-            print(f"No LiDAR tiles overlap cell {args.test_lidar}")
-            print("Try a cell in the -121 to -118W, 35-40N range")
+            print("No LiDAR tiles overlap this cell.")
             db.disconnect()
             return
         print(f"Found {len(tiles)} tiles — processing first one")
         note = agent._process_one_zip(tiles[0])
         if note:
-            print(f"\nConfidence: {note['confidence']}")
-            print(f"Depletion:  {note['depletion']}")
+            print(f"Confidence: {note['confidence']}")
         db.disconnect()
         return
 
     if args.lidar_tiles:
         from agents.lidar_agent import LidarAgent
-        print(f"\nRunning LiDAR agent on all {args.lidar_tiles} tiles")
         db.connect()
         agent = LidarAgent()
         stats = agent.process_all_tiles(dry_run=args.dry_run)
-        print(f"\nDone: {stats}")
+        print(f"Done: {stats}")
         db.disconnect()
         return
+
     run_ingest(
         min_level    = args.min_level,
         max_level    = args.max_level,

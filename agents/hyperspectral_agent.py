@@ -557,6 +557,9 @@ class HyperspectralAgent(BaseAgent):
         # Find overlapping EMIT files
         overlapping = find_overlapping_files(bounds, self._files)
         if not overlapping:
+            from core.alerts import alerts
+            alerts.info(cell.tile_id, self.agent_name,
+                        "No EMIT coverage for this cell")
             self.log.debug("No EMIT coverage for cell", tile_id=cell.tile_id)
             return cell
 
@@ -578,6 +581,16 @@ class HyperspectralAgent(BaseAgent):
         # Analyze minerals
         summary = analyze_minerals(data_list)
         summary.model = cfg["vision_model"]
+
+        # Warn if no real minerals found — likely all vegetation
+        if not summary.dominant_mineral_1:
+            from core.alerts import alerts
+            alerts.warning(cell.tile_id, self.agent_name,
+                           "No mineralogical signal detected — "
+                           "all pixels may be vegetation or cloud-covered")
+        else:
+            from core.alerts import alerts as _a
+            _a.reset_consecutive(self.agent_name)
 
         # Compute probability contribution
         hyper_prob = compute_hyperspectral_probability(summary)
