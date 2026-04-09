@@ -3,22 +3,6 @@
 
 ---
 
-## What This System Does
-
-This system analyzes satellite imagery and geological data to build a probability
-map of where gold is likely to be found in the Sierra Nevada — and where it has
-likely already been mined out.
-
-It works like a pyramid of specialists:
-- **Bottom layer:** Raw satellite images, elevation data, geological maps
-- **Middle layer:** Specialist agents that read that raw data and write plain summaries
-- **Top layer:** A reasoning AI that reads those summaries and scores every square kilometer
-
-You never touch the raw data directly. You just run a command, wait, then open the
-output in QGIS to see a heatmap.
-
----
-
 ## First Time Setup (Do This Once)
 
 ### Step 1 — Open your WSL terminal
