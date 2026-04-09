@@ -23,3 +23,11 @@ outputs/
 
 # AWS / other junk
 awscliv2.zip
+# Ignore large/unneeded folders
+aws/
+venv/
+data/
+outputs/
+*.zip
+*.geojson
+*.save
