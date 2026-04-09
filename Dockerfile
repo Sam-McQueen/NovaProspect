@@ -1,9 +1,13 @@
-FROM osgeo/gdal:ubuntu-small-latest
+FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
-    python3-pip \
+    gdal-bin \
+    libgdal-dev \
     python3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+ENV GDAL_CONFIG=/usr/bin/gdal-config
 
 WORKDIR /app
 
