@@ -1,0 +1,8 @@
+services:
+  nova:
+    build: .
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true
+    command: /bin/bash
