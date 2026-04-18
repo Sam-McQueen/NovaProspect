@@ -1,0 +1,8 @@
+# requirements-pip.txt
+# Packages installed via pip AFTER conda-forge env is set up.
+# Only include packages that are NOT on conda-forge or need pip-specific versions.
+# Everything else (numpy, rasterio, netcdf4, hdf5, etc.) comes from conda-forge
+# in the Dockerfile to ensure thread-safe HDF5.
+
+openai>=1.55.0
+osmium>=4.0.0

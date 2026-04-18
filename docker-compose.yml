@@ -1,8 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# NovaProspect — docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   docker compose build              # build the image (first time / after Dockerfile changes)
+#   docker compose up -d              # start container in background
+#   docker exec -it novaprospect bash # attach to running container
+#   docker compose down               # stop container
+#   docker compose logs -f            # tail logs
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   nova:
     build: .
+    container_name: novaprospect
     volumes:
+      # Project code — live-mounted so edits on host reflect inside container
       - .:/app
+
+      # Persistent cache — survives container rebuilds, bounded by MAX_CACHE_GB in .env
+      - nova-cache:/root/.sierra-cache
+
+    env_file:
+      - .env
+
     stdin_open: true
     tty: true
-    command: /bin/bash
+    restart: unless-stopped
+
+    # Keep container alive — attach with docker exec
+    command: ["bash", "-c", "echo 'NovaProspect ready' && sleep infinity"]
+
+volumes:
+  nova-cache:
+    # Named volume — persists between container rebuilds
+    # To wipe cache: docker volume rm novaprospect_nova-cache

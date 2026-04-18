@@ -1,0 +1,12 @@
+.git
+.env
+*.pyc
+__pycache__
+.DS_Store
+*.egg-info
+.venv
+venv
+nova-cache
+*.duckdb
+*.duckdb.wal
+data/
